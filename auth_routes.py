@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status, Depends, Request
 from database import session, engine
-from schemas import SignUpModel, LoginModel, TokenModel
+from schemas import SignUpModel, LoginModel, TokenModel, ResponseModel, UserModel
 from models import User
 from fastapi.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -78,40 +78,16 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return user.email
-
-@auth_router.post('/refresh')
-async def refresh_token(payload:TokenModel):
-
-    payload = verify_token(payload.refresh_token)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    email = payload.get("sub")
-    if email is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    access_expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
-    refresh_expires_delta = timedelta(days=settings.refresh_token_expire_days)
-    access_token = create_access_token(data={"sub": email}, expires_delta=access_expires_delta)
-    refresh_token = create_refresh_token(data={"sub": email}, expires_delta=refresh_expires_delta)
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+    current_user = UserModel.from_orm(user)
+    return current_user
 
 
 @auth_router.get('/')
-async def test_route(current_user: dict = Depends(get_current_user)):
-    return {'message': f'auth route working perfectly fine, user is: {current_user}'}
+async def test_route():
+    return {'status': True, 'message': f'auth route working perfectly fine', 'data': {"current_user": current_user}}
 
 
-@auth_router.post('/signup', response_model=SignUpModel, status_code=status.HTTP_201_CREATED)
+@auth_router.post('/signup', response_model=ResponseModel, status_code=status.HTTP_201_CREATED)
 async def signup(user:SignUpModel):
     db_email = session.query(User).filter(User.email ==  user.email).first()
 
@@ -134,8 +110,8 @@ async def signup(user:SignUpModel):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
             detail="User password is none"
             )
-    else:
-        password = generate_password_hash(user.password_has)
+    
+    password = generate_password_hash(user.password_hash)
         
     
     new_user = User(
@@ -150,11 +126,14 @@ async def signup(user:SignUpModel):
     session.commit()
     session.refresh(new_user)
 
-    return new_user
+    Response_data = UserModel.from_orm(new_user)
+
+    return {"status": True,'message': "user created successfully!", "data": Response_data}
 
 
-@auth_router.post('/login', status_code=200)
+@auth_router.post('/login', response_model=ResponseModel, status_code=200)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+
     db_user=session.query(User).filter(User.email==form_data.username).first()
     
     if db_user and check_password_hash(db_user.password_hash, form_data.password):
@@ -163,13 +142,52 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         access_token = create_access_token(data={"sub": db_user.email}, expires_delta=access_expires_delta)
         refresh_token = create_refresh_token(data={"sub": db_user.email}, expires_delta=refresh_expires_delta)
 
-        user_data = User(
-        username=db_user.username, 
-        email=db_user.email, 
-        is_active=db_user.is_active,
-        is_staff=db_user.is_staff
-        )
+        Response_data = UserModel.from_orm(db_user)
+
+        token = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
         
-        return {"status": True, "data": user_data, "access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+        return {
+        "status": True,
+        "message": "Login successful! Welcome back.",
+        "data": {"user": Response_data, "token": token},
+        }
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or password")
+
+
+@auth_router.post('/refresh', response_model=ResponseModel,)
+async def refresh_token(payload:TokenModel):
+
+    payload = verify_token(payload.refresh_token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    email = payload.get("sub")
+    if email is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
+    refresh_expires_delta = timedelta(days=settings.refresh_token_expire_days)
+    access_token = create_access_token(data={"sub": email}, expires_delta=access_expires_delta)
+    refresh_token = create_refresh_token(data={"sub": email}, expires_delta=refresh_expires_delta)
+    return {
+        "status": True, 
+        "message": "Token generated successfully", 
+        "data": {
+            "access_token": access_token, 
+            "refresh_token": refresh_token, 
+            "token_type": "bearer"
+        }
+        }
